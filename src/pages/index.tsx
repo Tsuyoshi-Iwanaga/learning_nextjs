@@ -1,22 +1,22 @@
 import Head from 'next/head'
-import Link from 'next/link'
-import Image from 'next/image'
 import styled from 'styled-components'
-// import styles from '../../styles/Home.module.css'
+import Layout, { siteTitle } from '@/components/layout'
+import utilStyles from '@/styles/utils.module.css'
 
 export default function Home() {
-  const HeadingH1 = styled.h1`
-    font-size: 16px;
-    color: blue;
+  const Introduce = styled.p`
+    font-size: 24px;
+    font-weight: bold;
   `
   return (
-    <>
-      <HeadingH1>Index</HeadingH1>
-      Read→{' '}
-      <Link href="/posts/first-post"><a>postPage</a></Link>
-      <div>
-        <Image src="/images/profile.png" height={144} width={144} alt="" />
-      </div>
-    </>
+    <Layout home>
+      <Head>
+        <title>{siteTitle}</title>
+      </Head>
+      <section className={utilStyles.headingMd}>
+        <Introduce>Hello I'm Tsuyoshi.<br />I'm workign frontend engineer in Japan.</Introduce>
+        <p>(This is a sample website - you’ll be building a site like this on <a href="https://nextjs.org/learn">our Next.js tutorial</a>.)</p>
+      </section>
+    </Layout>
   )
 }
