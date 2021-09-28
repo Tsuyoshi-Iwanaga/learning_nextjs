@@ -61,6 +61,7 @@ export async function getPostData(id) {
 
   //Use remark to convert markdown into HTML string
   const processedContent = await remark()
+    .use(hlje)
     .use(html)
     .process(matterResult.content)
 
