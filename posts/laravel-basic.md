@@ -114,11 +114,31 @@ $res->setContent();
 
 
 
-
-
 ## artisanコマンド
 
-コントローラ作成(/app/Http/Controllersの中に作られる)
+各種ファイルの作成
+* auth
+* channel
+* command
+* controller
+* event
+* exception
+* factory
+* job
+* listener
+* mail
+* middleware
+* migration
+* model
+* notification
+* observer
+* policy
+* provider
+* request
+* resource
+* rule
+* seeder
+* test
 
 ```shell
 artisan make:controller HelloController
