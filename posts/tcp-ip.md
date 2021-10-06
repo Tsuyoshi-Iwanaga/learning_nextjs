@@ -339,3 +339,205 @@ IPv4では32ビットで、8ビットごとに区切った空間を**オクテ�
 
 ### ルータを入れてみる
 
+まず3つのNSを作成
+
+```shell
+sudo ip netns add ns1
+sudo ip netns add ns2
+sudo ip netns add router
+```
+
+それぞれのNSを繋ぐvethを作成
+
+```shell
+sudo ip link add ns1-veth0 type veth peer name gw-veth0
+sudo ip link add ns2-veth0 type veth peer name gw-veth1
+```
+
+vethをそれぞれのNSに配置
+
+```shell
+sudo ip link set ns1-veth0 netns ns1
+sudo ip link set gw-veth0 netns router
+```
+
+```shell
+sudo ip link set ns2-veth0 netns ns2
+sudo ip link set gw-veth1 netns router
+```
+
+それぞれのvethインターフェースをUPの状態にする
+
+```shell
+sudo ip netns exec ns1 ip link set ns1-veth0 up
+sudo ip netns exec router ip link set gw-veth0 up
+```
+
+```shell
+sudo ip netns exec ns2 ip link set ns2-veth0 up
+sudo ip netns exec router ip link set gw-veth1 up
+```
+
+IPアドレスを設定する(ns1とns2は別のセグメントに所属させる)
+
+```shell
+sudo ip netns exec ns1 ip address add 192.0.2.1/24 dev ns1-veth0
+sudo ip netns exec router ip address add 192.0.2.254/24 dev gw-veth0
+```
+
+```shell
+sudo ip netns exec ns2 ip address add 198.51.100.1/24 dev ns2-veth0
+sudo ip netns exec router ip address add 198.51.100.254/24 dev gw-veth1
+```
+
+ルータに設定するIPアドレスは特に制限はないが、一般的にはセグメントの先頭もしくは末尾のIPアドレスを使うことが多い。ちなみに.255のアドレスは**ブロードキャストアドレス**といってホストアドレスとしては使用できない。
+ブロードキャストアドレスはそのセグメントに所属するすべてのノードに対して通信したいときに使う
+
+またホスト部のビットがすべて0の時は**ネットワークアドレス**となるためこれもホストアドレスとしは使用できない
+
+通信の確認のためまずはnsとrouterが疎通できるか確認
+
+```shell
+sudo ip netns exec ns1 ping -c 3 192.0.2.254 #ns1からrouter 問題なし
+sudo ip netns exec router ping -c 3 192.0.2.1 #routerからns1 問題なし
+```
+
+```shell
+sudo ip netns exec ns2 ping -c 3 198.51.100.254 #ns2からrouter 問題なし
+sudo ip netns exec router ping -c 3 198.51.100.1 #routerからns2 問題なし
+```
+
+次にrouter越しにns1からns2に通信できるか確認
+
+```shell
+sudo ip netns exec ns1 ping -c 3 198.51.100.1 #ns1からns2 エラーとなる
+```
+
+エラーとなってしまう理由はルーティングの設定がルーティングテーブルに記載されていないため
+現在のルーティングテーブルの設定を確認してみる
+
+```shell
+sudo ip netns exec ns1 ip route show
+# 192.0.2.0/24 dev ns1-veth0 proto kernel scope link src 192.0.2.1 
+```
+
+つまり現状ではns1から198.51.100.1への通信が発生した際に、どこへパケットを渡せばいいのかわからない状態になっている。そこでデフォルトルートを設定し、ルーターに向くように設定する
+
+```shell
+sudo ip netns exec ns1 ip route add default via 192.0.2.254
+```
+
+ns2にも同じように設定する
+
+```shell
+sudo ip netns exec ns2 ip route add default via 198.51.100.254
+```
+
+最後にrouterにて下記の設定をおこなう
+sysctlはカーネルの設定を変更するコマンドで、**プロトコルスタック**と呼ばれるパケットを処理する領域もここに含まれている。
+net.ipv4.ip_forwardのパラメータを1にして有効化するとLinuxにおいてIPv4のルータとして動作するようになる
+
+```shell
+sudo ip netns exec router sysctl net.ipv4.ip_forward=1
+```
+
+ns1とns2で無事疎通が確認できればOK
+
+```shell
+sudo ip netns exec ns1 ping -c 3 198.51.100.1
+sudo ip netns exec ns2 ping -c 3 192.0.2.1
+```
+
+### ルータを増やしてみる(目的地までに複数のルータを介する場合)
+
+```shell
+sudo ip netns add ns1
+sudo ip netns add ns2
+sudo ip netns add router1
+sudo ip netns add router2
+```
+
+```shell
+sudo ip link add ns1-veth0 type veth peer name gw1-veth0
+sudo ip link add gw1-veth1 type veth peer name gw2-veth0
+sudo ip link add gw2-veth1 type veth peer name ns2-veth0
+```
+
+```shell
+sudo ip link set ns1-veth0 netns ns1
+sudo ip link set gw1-veth0 netns router1
+sudo ip link set gw1-veth1 netns router1
+sudo ip link set gw2-veth0 netns router2
+sudo ip link set gw2-veth1 netns router2
+sudo ip link set ns2-veth0 netns ns2
+```
+
+```shell
+sudo ip netns exec ns1 ip link set ns1-veth0 up
+sudo ip netns exec router1 ip link set gw1-veth0 up
+sudo ip netns exec router1 ip link set gw1-veth1 up
+sudo ip netns exec router2 ip link set gw2-veth0 up
+sudo ip netns exec router2 ip link set gw2-veth1 up
+sudo ip netns exec ns2 ip link set ns2-veth0 up
+```
+
+IPアドレスの付与を以下のように行う(ns1とns2の間に2台のルータが存在する)
+
+* ns1とrouter1は同じセグメント(192.0.2.0/24)
+* router1とrouter2は同じセグメント(203.0.113.0/24)
+* router2とns2は同じセグメント(198.51.100.0/24)
+
+```shell
+sudo ip netns exec ns1 ip address add 192.0.2.1/24 dev ns1-veth0
+sudo ip netns exec router1 ip address add 192.0.2.254/24 dev gw1-veth0
+sudo ip netns exec router1 ip address add 203.0.113.1/24 dev gw1-veth1
+sudo ip netns exec router2 ip address add 203.0.113.2/24 dev gw2-veth0
+sudo ip netns exec router2 ip address add 198.51.100.254/24 dev gw2-veth1
+sudo ip netns exec ns2 ip address add 198.51.100.1/24 dev ns2-veth0
+```
+
+ns1とns2にはデフォルトルートとして各セグメントのルータのIPアドレスを設定
+
+```shell
+sudo ip netns exec ns1 ip route add default via 192.0.2.254
+sudo ip netns exec ns2 ip route add default via 198.51.100.254
+```
+
+ルータのカーネルパラメータを変更
+
+```shell
+sudo ip netns exec router1 sysctl net.ipv4.ip_forward=1
+sudo ip netns exec router2 sysctl net.ipv4.ip_forward=1
+```
+
+この状態で試しにpingを打つ
+
+```shell
+sudo ip netns exec ns1 ping -c 3 198.51.100.1
+# From 192.0.2.254 icmp_seq=1 Destination Net Unreachable
+```
+
+192.0.2.254とはrouter1のNSとなっている、つまり198.51.100.1に宛てたパケットをルータが受け取ったが、それを次にどこへ渡したらよいのかわからなかったということをいっている
+
+これを解決するためにはルータにもルーティングテーブルにてルーティングエントリを追加する必要がある
+
+```shell
+sudo ip netns exec router1 ip route add 198.51.100.0/24 via 203.0.113.2
+sudo ip netns exec router2 ip route add 192.0.2.0/24 via 203.0.113.1
+```
+
+再びpingを打つとns1とns2で相互に通信ができていることがわかる
+
+```shell
+sudo ip netns exec ns1 ping -c 3 198.51.100.1 #OK
+sudo ip netns exec ns2 ping -c 3 192.0.2.1 #OK
+```
+
+今回のように直接繋がっていないセグメントの情報はノードに対して何らかの方法で教えてあげる必要がある
+手作業でルーティングエントリを追加する方法は**スタティックルーティング**(静的経路制御)という
+
+他にはルータ同士が自律的に自身の知っているルーティング情報を教え合う方法もある
+これは**ダイナミックルーティング**(動的経路制御)といい、BGP(Border Gateway Protcol)やOSPF(Open Shortest Path First)といった専用のプロトコルが用いられルーティングプロトコルと呼ばれる
+
+## ④イーサネット
+
