@@ -774,3 +774,82 @@ NetworkNamespaceとvethインターフェースだけでは同じセグメント
 
 ここでは3つのNamespaceが接続されたセグメントを作成する
 
+```shell
+sudo ip netns add ns1
+sudo ip netns add ns2
+sudo ip netns add ns3
+sudo ip netns add bridge
+```
+
+```shell
+sudo ip link add ns1-veth0 type veth peer name ns1-br0
+sudo ip link add ns2-veth0 type veth peer name ns2-br0
+sudo ip link add ns3-veth0 type veth peer name ns3-br0
+```
+
+```shell
+sudo ip link set ns1-veth0 netns ns1
+sudo ip link set ns2-veth0 netns ns2
+sudo ip link set ns3-veth0 netns ns3
+sudo ip link set ns1-br0 netns bridge
+sudo ip link set ns2-br0 netns bridge
+sudo ip link set ns3-br0 netns bridge
+```
+
+```shell
+sudo ip netns exec ns1 ip link set ns1-veth0 up
+sudo ip netns exec ns2 ip link set ns2-veth0 up
+sudo ip netns exec ns3 ip link set ns3-veth0 up
+sudo ip netns exec bridge ip link set ns1-br0 up
+sudo ip netns exec bridge ip link set ns2-br0 up
+sudo ip netns exec bridge ip link set ns3-br0 up
+```
+
+```shell
+sudo ip netns exec ns1 ip address add 192.0.2.1/24 dev ns1-veth0
+sudo ip netns exec ns2 ip address add 192.0.2.2/24 dev ns2-veth0
+sudo ip netns exec ns3 ip address add 192.0.2.3/24 dev ns3-veth0
+```
+
+```shell
+sudo ip netns exec ns1 ip link set dev ns1-veth0 address 00:00:5E:00:53:01
+sudo ip netns exec ns2 ip link set dev ns2-veth0 address 00:00:5E:00:53:02
+sudo ip netns exec ns3 ip link set dev ns3-veth0 address 00:00:5E:00:53:03
+```
+
+ネットワークブリッジを作る(ネットワークインターフェースの一種なのでUPにしておく)
+
+```shell
+sudo ip netns exec bridge ip link add dev br0 type bridge
+```
+
+```shell
+sudo ip netns exec bridge ip link set br0 up
+```
+
+ネットワークブリッジにvethインターフェースの片側を接続する
+
+```shell
+sudo ip netns exec bridge ip link set ns1-br0 master br0
+sudo ip netns exec bridge ip link set ns2-br0 master br0
+sudo ip netns exec bridge ip link set ns3-br0 master br0
+```
+
+pingを打ってみる
+
+```shell
+sudo ip netns exec ns1 ping -c 3 192.0.2.2 #ns1からns2へ
+sudo ip netns exec ns2 ping -c 3 192.0.2.3 #ns2からns3へ
+sudo ip netns exec ns3 ping -c 3 192.0.2.1 #ns3からns1へ
+```
+
+いずれも正常に疎通できるのでネットワークブリッジを使って3つのNetworkNamespaceを同じセグメントに繋ぐことができた
+
+念の為、MACアドレステーブルを確認してみる
+
+```shell
+sudo ip netns exec bridge bridge fdb show br br0 | grep -i 00:00:5e
+```
+
+MACアドレステーブルには有効期限があるため、うまくテーブルに出てこない時はpingを打つなどして通信すればネットワークブリッジが自動で登録してくれる
+
