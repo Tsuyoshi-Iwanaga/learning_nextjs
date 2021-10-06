@@ -541,3 +541,236 @@ sudo ip netns exec ns2 ping -c 3 192.0.2.1 #OK
 
 ## ④イーサネット
 
+OSI参照モデルの物理層とデータリンク層に位置するプロトコルを含んだ規格
+現在の家庭やオフィスなどではほとんどイーサネットが用いられている
+
+### フレーム
+
+イーサネットでデータを送る単位を**フレーム**という
+IPのパケットは異なるフレームに積みかえられながら最終目的地まで届くようになっている
+
+### MACアドレス
+
+フレームごとにデータの送信元と送信先を管理する必要があるが、そこで**MACアドレス**(Media Access Control address)が使用される。別名ハードウェアアドレスとも呼ばれ、イーサネットのフレームを送受信するネットワーク機器ごとに付与される
+
+MACアドレスは48ビットの空間を持つ正の整数で、ネットワーク機器ごとに一意になるようになっている
+よって同じMACアドレスを持った製品は全世界で1つだけになることが期待されている
+(※実際には厳密ではなく同時に同じMACアドレスを持つ機器が存在する可能性はゼロではないが、ブロードキャストドメイン内で重複しなければ問題ない)
+
+48ビットの空間において上位24ビットと下位24ビットで意味が分かれている
+上位がネットワーク機器を製造するベンダーごとに、下位24ビットはベンダーが機器の識別子が一意となるように割り当てながら製造している
+通常は48ビットを8ビットごとに区切った00:00:5E:00:53:01などで表すことが多い
+
+### フレームを観察する
+
+まずは実験用のネットワークを作成(2つのNSを繋ぎIPアドレスを付与)
+
+```shell
+sudo ip netns add ns1
+sudo ip netns add ns2
+```
+
+```shell
+sudo ip link add ns1-veth0 type veth peer name ns2-veth0
+```
+
+```shell
+sudo ip link set ns1-veth0 netns ns1
+sudo ip link set ns2-veth0 netns ns2
+```
+
+```shell
+sudo ip netns exec ns1 ip link set ns1-veth0 up
+sudo ip netns exec ns2 ip link set ns2-veth0 up
+```
+
+```shell
+sudo ip netns exec ns1 ip address add 192.0.2.1/24 dev ns1-veth0
+sudo ip netns exec ns2 ip address add 192.0.2.2/24 dev ns2-veth0
+```
+
+観察のためにvethインターフェースのMACアドレスを変更してみる(デフォルトではランダム)
+
+```shell
+sudo ip netns exec ns1 ip link set dev ns1-veth0 address 00:00:5E:00:53:01
+sudo ip netns exec ns2 ip link set dev ns2-veth0 address 00:00:5E:00:53:02
+```
+
+確認してみる
+
+```shell
+sudo ip netns exec ns1 ip link show | grep link/ether
+sudo ip netns exec ns2 ip link show | grep link/ether
+```
+
+パケットキャプチャの準備をする
+
+```shell
+sudo ip netns exec ns1 tcpdump -tnel -i ns1-veth0 icmp
+```
+
+-t 時間の情報を表示しない
+-n IPアドレスの逆引きをしない
+-e イーサネットのヘッダ情報を表示する
+-l NSでtcpdumpコマンドを使用するときにつけておくと表示がスムーズになる
+
+ns1からns2へpingをうつ
+
+```shell
+sudo ip netns exec ns1 ping -c 1 192.0.2.2
+```
+
+tcpdumpで監視していた方にはこのように表示される
+
+```shell
+00:00:5e:00:53:01 > 00:00:5e:00:53:02, ethertype IPv4 (0x0800), length 98: 192.0.2.1 > 192.0.2.2: ICMP echo request, id 62115, seq 1, length 64
+00:00:5e:00:53:02 > 00:00:5e:00:53:01, ethertype IPv4 (0x0800), length 98: 192.0.2.2 > 192.0.2.1: ICMP echo reply, id 62115, seq 1, length 64
+```
+
+### MACアドレスを知るには
+
+IPアドレスからMACアドレスを取得する際には**ARP**(Address Resolution Protocol)というプロトコルが使われる
+tcpdumpにこの情報も出力させて確認してみる
+
+まずはMACアドレスのキャッシュを削除
+
+```shell
+sudo ip netns exec ns1 ip neigh flush all
+```
+
+tcpdumpにてキャプチャするプロトコルにARPを追加して実行
+
+```shell
+sudo ip netns exec ns1 tcpdump -tnel -i ns1-veth0 icmp or arp
+```
+
+pingを打つと下記のように出力される
+
+```shell
+00:00:5e:00:53:01 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 192.0.2.2 tell 192.0.2.1, length 28
+
+00:00:5e:00:53:02 > 00:00:5e:00:53:01, ethertype ARP (0x0806), length 42: Reply 192.0.2.2 is-at 00:00:5e:00:53:02, length 28
+
+00:00:5e:00:53:01 > 00:00:5e:00:53:02, ethertype IPv4 (0x0800), length 98: 192.0.2.1 > 192.0.2.2: ICMP echo request, id 62149, seq 1, length 64
+
+00:00:5e:00:53:02 > 00:00:5e:00:53:01, ethertype IPv4 (0x0800), length 98: 192.0.2.2 > 192.0.2.1: ICMP echo reply, id 62149, seq 1, length 64
+
+00:00:5e:00:53:02 > 00:00:5e:00:53:01, ethertype ARP (0x0806), length 42: Request who-has 192.0.2.1 tell 192.0.2.2, length 28
+
+00:00:5e:00:53:01 > 00:00:5e:00:53:02, ethertype ARP (0x0806), length 42: Reply 192.0.2.1 is-at 00:00:5e:00:53:01, length 28
+```
+
+一番上の通信ではARPにて192.0.2.2のIPアドレスをどの機器が持っているか192.0.0.1に教えてくれるように要求している、これは**ARPリクエスト**と呼ばれる
+
+それに対して二番目の通信で192.0.2.2は00:00:5e:00:53:02が持っていると返答している、これを**ARPリプライ**という
+
+また最初の通信で問い合わせ先がff:ff:ff:ff:ff:ffとなっているが、これはブロードキャストアドレスでフレームが届く範囲内ですべての機器に問い合わせるという意味、このようにブロードキャストアドレスに送信先が指定されたフレームを**ブロードキャストフレーム**、またブロードキャストフレームが届く範囲を**ブロードキャストドメイン**という
+
+### パケットの積み替え
+
+ブロードキャストドメイン内(一般的にはセグメントと同じ)での通信では、一つのフレームでパケットを直接送り届けることができる
+
+パケットが積みかえられる様子を観察するため、セグメントが2つあるネットワークで実験してみる
+
+```shell
+sudo ip netns add ns1
+sudo ip netns add ns2
+sudo ip netns add router
+```
+
+```shell
+sudo ip link add ns1-veth0 type veth peer name gw-veth0
+sudo ip link add ns2-veth0 type veth peer name gw-veth1
+```
+
+```shell
+sudo ip link set ns1-veth0 netns ns1
+sudo ip link set gw-veth0 netns router
+sudo ip link set gw-veth1 netns router
+sudo ip link set ns2-veth0 netns ns2
+```
+
+```shell
+sudo ip netns exec ns1 ip link set ns1-veth0 up
+sudo ip netns exec router ip link set gw-veth0 up
+sudo ip netns exec router ip link set gw-veth1 up
+sudo ip netns exec ns2 ip link set ns2-veth0 up
+```
+
+```shell
+sudo ip netns exec ns1 ip address add 192.0.2.1/24 dev ns1-veth0
+sudo ip netns exec router ip address add 192.0.2.254/24 dev gw-veth0
+sudo ip netns exec router ip address add 198.51.100.254/24 dev gw-veth1
+sudo ip netns exec ns2 ip address add 198.51.100.1/24 dev ns2-veth0
+```
+
+```shell
+sudo ip netns exec ns1 ip route add default via 192.0.2.254
+sudo ip netns exec ns2 ip route add default via 198.51.100.254
+```
+
+```shell
+sudo ip netns exec router sysctl net.ipv4.ip_forward=1
+```
+
+MACアドレスを付与する
+
+```shell
+sudo ip netns exec ns1 ip link set dev ns1-veth0 address 00:00:5E:00:53:11
+sudo ip netns exec router ip link set dev gw-veth0 address 00:00:5E:00:53:12
+sudo ip netns exec router ip link set dev gw-veth1 address 00:00:5E:00:53:21
+sudo ip netns exec ns2 ip link set dev ns2-veth0 address 00:00:5E:00:53:22
+```
+
+tcpdumpでパケットキャプチャするが、今回はrouterのgw-veth0とgw-veth1を別ウインドウでそれぞれ見てみる
+
+```shell
+sudo ip netns exec router tcpdump -tnel -i gw-veth0 icmp or arp
+```
+
+```shell
+sudo ip netns exec router tcpdump -tnel -i gw-veth1 icmp or arp
+```
+
+ns1からns2へpingをうつ
+
+```shell
+sudo ip netns exec ns1 ping -c 3 198.51.100.1
+```
+
+ns1と繋がっているgw-veth0の出力
+
+```shell
+00:00:5e:00:53:11 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 192.0.2.254 tell 192.0.2.1, length 28 #ns1のデフォルトルートによりルータのMACアドレスを問い合わせ
+00:00:5e:00:53:12 > 00:00:5e:00:53:11, ethertype ARP (0x0806), length 42: Reply 192.0.2.254 is-at 00:00:5e:00:53:12, length 28 #ルータより00:00:5e:00:53:12というMACアドレスが返される
+00:00:5e:00:53:11 > 00:00:5e:00:53:12, ethertype IPv4 (0x0800), length 98: 192.0.2.1 > 198.51.100.1: ICMP echo request, id 62414, seq 1, length 64 #ns1からルータへパケットが送信
+```
+
+ns2と繋がっているgw-veth1の出力
+
+```shell
+00:00:5e:00:53:21 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 198.51.100.1 tell 198.51.100.254, length 28 #ルータから198.51.100.254に対応するMACアドレスを探す
+00:00:5e:00:53:22 > 00:00:5e:00:53:21, ethertype ARP (0x0806), length 42: Reply 198.51.100.1 is-at 00:00:5e:00:53:22, length 28 #ns2が00:00:5e:00:53:22というMACアドレスを返す
+00:00:5e:00:53:21 > 00:00:5e:00:53:22, ethertype IPv4 (0x0800), length 98: 192.0.2.1 > 198.51.100.1: ICMP echo request, id 62414, seq 1, length 64 #ルータからns1へパケットが送信される
+```
+
+通信の流れとしては以下のような感じ
+
+* 自分のセグメント内のルーティングテーブルを参照し、どのIPアドレスへパケットを渡すか確認
+* ARPによって渡すIPアドレスのMACアドレスを取得してその機器に対してフレームを作成しパケットを送信
+
+### ブリッジ
+
+一般家庭やオフィスでも**スイッチングハブ**といった複数の機器を接続する仕組みが導入されている
+これをより一般化した概念が**ブリッジ**というもの
+ネットワーク層でパケットを転送するための機器はルータだが、同じくデータリンク層でフレームを転送する機器をブリッジと呼ぶ。これを使うことで同じブロードキャストドメインにたくさんのネットワーク機器を繋げることができるようになる
+
+ブリッジの仕事は**自身のどのポートにどのMACアドレスの機器が接続されているかを管理する**こと
+フレームがやってくると送信先のMACアドレスを見て該当機器の繋がったポートへフレームを転送する
+
+ポートとMACアドレスとの管理を行うための台帳は**MACアドレステーブル**という
+
+NetworkNamespaceとvethインターフェースだけでは同じセグメントに2つのNamespaceしか繋げないが(直列)、ブリッジとして振る舞うLinuxの**ネットワークブリッジ**というものを使うと3つ以上のNamespaceを同じセグメントに繋ぐことができる
+
+ここでは3つのNamespaceが接続されたセグメントを作成する
+
