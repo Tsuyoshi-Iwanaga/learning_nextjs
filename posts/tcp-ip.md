@@ -1255,3 +1255,193 @@ sudo ip netns exec client ip route show
 **PPPoE**(Point-to-Point over Ethernet)というプロトコルでやりとりされるIPCP(Internet Protocol Control Protcol)というプロトコルのオプションでアドレスが配布されている
 ちなみに上記はIPv4の話であり、IPv6ではまた事情が異なる
 
+## ⑦NAT
+
+NAT(Network Address Translation)は**IPアドレスの変換**に使われる
+パケットのヘッダにおいてIPアドレスの入ったフィールドの値を書き換える操作のこと
+
+IPアドレスは32ビット空間なので総数は43億個になるが、今のインターネットの規模では足りなくなってきている
+そこでNAT(の一種である**NAPT** Network Address Port Translation)が使われる
+
+NAPTによって少数のグローバルアドレスを多数のプライベートアドレスで共有することができる
+これによりインターネットを利用するホストの台数に比較し、必要なグローバルアドレスを少なくしている
+
+プライベートアドレスとして予約されているのはIPアドレスの下記の範囲
+
+* 10.0.0.0/8
+* 172.16.0.0/12
+* 192.168.0.0/16
+
+組織内のネットワークを**LAN**といい、上記のアドレス範囲から特定の範囲を切り出してサブネットを形成する
+そしてそこからLANにつながるノードのIPアドレスを採番して利用している
+
+NATにはいくつか種類があるが、家庭やオフィスでよく利用されている下記2つを扱う
+
+* Source NAT
+* Destination NAT
+
+### Source NAT
+
+パケット送信元のIPアドレス(Source IP Address)を変換する
+具体的にはLANでしか通用しないプライベートアドレスをインターネットで使えるグローバルアドレスに書きかえる
+一般的には**ルータ**によって送信先がグローバルアドレスかつ送信元がプライベートアドレスとなっているパケットを対象に、自身のインターフェースに付与されているグローバルアドレスに書きかえる
+※つまり**内から外**へ出て行くときに使用されるNATともいえる
+
+また戻りの通信の場合は戻り先はLANのホストとなるため再びグローバルアドレスからプライベートアドレスへの変換が必要になる
+ただしLANにたくさんのホストがつながっている場合、ルータはどのホストへ通信を戻したらいいのかがわからなくなるためIPアドレスと併せて**トランスポート層のポート番号も同時に書き換え**を行う(NAPT)
+
+NAPTではインターネットに転送するパケットのIPアドレスとポート番号を必要に応じて書きかえるとともに前後の対応関係を記憶しておくようになっている(**セッション**)
+これによって送信したパケットが戻ってきたときにLANの中のどのノードにパケットを転送すれば良いかが判断できる
+
+ちなみにNATやNAPTが書きかえるヘッダはIPアドレスやポートだけではない。
+例えばIPやTCPでデータのビットに誤りが生じていないか検出するためのチェックサムと呼ばれるヘッダなども修正されている
+このようにIPアドレスを書き換えることでなんらかの不整合が起きてしまうヘッダは書きかえの対象になる
+
+### 実際に試してみる
+
+NatworkNamespaceを利用して試してみる
+
+```shell
+sudo ip netns add lan
+sudo ip netns add router
+sudo ip netns add wan
+```
+
+```shell
+sudo ip link add lan-veth0 type veth peer name gw-veth0
+sudo ip link add wan-veth0 type veth peer name gw-veth1
+```
+
+```shell
+sudo ip link set lan-veth0 netns lan
+sudo ip link set gw-veth0 netns router
+sudo ip link set gw-veth1 netns router
+sudo ip link set wan-veth0 netns wan
+```
+
+```shell
+sudo ip netns exec lan ip link set lan-veth0 up
+sudo ip netns exec router ip link set gw-veth0 up
+sudo ip netns exec router ip link set gw-veth1 up
+sudo ip netns exec wan ip link set wan-veth0 up
+```
+
+```shell
+sudo ip netns exec router ip address add 192.0.2.254/24 dev gw-veth0
+sudo ip netns exec router ip address add 203.0.113.254/24 dev gw-veth1
+sudo ip netns exec router sysctl net.ipv4.ip_forward=1
+```
+
+```shell
+sudo ip netns exec lan ip address add 192.0.2.1/24 dev lan-veth0
+sudo ip netns exec lan ip route add default via 192.0.2.254
+```
+
+```shell
+sudo ip netns exec wan ip address add 203.0.113.1/24 dev wan-veth0
+sudo ip netns exec wan ip route add default via 203.0.113.254
+```
+
+これからSource NATを設定していくが、まずは現状のNATの設定を確認してみる
+
+iptablesコマンドを使うとNATの設定やパケットフィルタリングの設定などができる
+機能がテーブルで分かれているので-tでnatのテーブルを指定、また-Lオプションで現在の設定を確認する
+
+```shell
+sudo ip netns exec router iptables -t nat -L
+```
+
+```shell
+Chain PREROUTING (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain POSTROUTING (policy ACCEPT)
+target     prot opt source               destination 
+```
+
+Chainの後の記載は処理を適用するタイミングを表していて、iptablesではそのタイミングを**チェイン**と呼んでいる
+ただし初期状態ではnatテーブルには上記のように何も指定が入っていない
+
+NATのルールを追加してみる
+
+```shell
+sudo ip netns exec router iptables -t nat \
+-A POSTROUTING \
+-s 192.0.2.0/24 \
+-o gw-veth1 \
+-j MASQUERADE
+```
+
+-A : 処理を追加するチェインを指定 POSTROUTINGはルーティングが終わりパケットがインターフェースから出て行く直前を示している
+-s : 処理対象となる送信元のIPアドレス範囲
+-o : 処理対象とする出力先のネットワークインターフェース
+-j : 条件に一致するパケットをどのように処理するかのルール、iptablesでは処理方法のルールをターゲットを呼ぶ、ここで指定したMASQUERADEはパケットに適用するターゲットがSource NATであることを表している
+
+※MASQUERADE(マスカレード)はLinuxにおけるSource NATの実装に付けられた名称
+一般的に**IPマスカレード**と呼ばれる
+
+設定するとこうなる
+
+```shell
+Chain PREROUTING (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain POSTROUTING (policy ACCEPT)
+target     prot opt source               destination         
+MASQUERADE  all  --  192.0.2.0/24         anywhere 
+```
+
+これでlanからwanに向けてPingを打ってみる
+
+```shell
+sudo ip netns exec lan ping 203.0.113.1
+```
+
+またtcpdumpでlanの通信を確認してみる
+
+```shell
+sudo ip natns exec lan tcpdump -tnl -i lan-veth0 icmp
+```
+
+このような出力になる
+行きの送信元IPと戻りの送信先IPが192.0.2.1になっている(これまでと同じ挙動)
+
+```shell
+IP 192.0.2.1 > 203.0.113.1: ICMP echo request, id 3683, seq 71, length 64
+IP 203.0.113.1 > 192.0.2.1: ICMP echo reply, id 3683, seq 71, length 64
+...
+```
+
+一方でwanの通信を確認してみる
+
+```shell
+sudo ip netns exec wan tcpdump -tnl -i wan-veth0 icmp
+```
+
+このような出力になる
+行きの送信元IPと戻りの送信先IPはどちらも203.0.113.254となっている
+つまりルータに付与されたgw-veth1インターフェースのIPアドレスに変換されているということ
+
+```shell
+IP 203.0.113.254 > 203.0.113.1: ICMP echo request, id 3810, seq 1, length 64
+IP 203.0.113.1 > 203.0.113.254: ICMP echo reply, id 3810, seq 1, length 64
+```
+
+【補足】なぜPingで使われるICMPはトランスポート層のプロトコルではなくポート番号を管理するヘッダもないのにNAPTが実現できたのか？
+→ ICMPのヘッダにあるIdentifierというフィールドがポートの代わりに使われ、NAPTにおいてセッションの管理が行われたから
+
+【補足2】IPv4アドレスの割り当ては**インターネットレジストリ**という組織が管理をしている
+**IANA**を頂点とした階層構造の組織で、下位組織から上位組織にIPv4アドレスの割り当てを申請し、受理されると上位組織の在庫から一部を受け取るような仕組みになっている
+
