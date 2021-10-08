@@ -1180,3 +1180,78 @@ IP 8.8.8.8.53 > 172.31.36.34.57451: 44951$ 1/0/1 A 93.184.216.34 (56)
 しかしこれはルータがネームサーバになっているわけではなくあくまでルータがコンピュータとネームサーバの間を中継しているだけ(DNSのフォワーダ、プロキシ、リレーなどという)
 
 これによってコンピュータのユーザはルータのIPアドレスだけ知っていれば名前解決ができることやルータの設定変更だけでネームサーバを切り替えられるというメリットがある
+
+### DHCP
+
+DHCP(Dynamic Host Configuration Protocol)はコンピュターがTCP/IPのネットワークを使う際の設定を自動化するために使われる
+UDPの67番ポートをデフォルトで使用するバイナリベースのプロトコル
+
+* ネットワークインターフェースにIPアドレスを付与する
+* デフォルトルートのルーティングエントリをルーティングテーブルに追加する
+* 名前解決に利用するネームサーバを指定する
+
+ネットワークの設定を配布するコンピュターをDHCPサーバという
+設定を受け取るコンピュターはDHCPクライアントという
+一般的なネットワークではデフォルトルートとなるルータがDHCPサーバの役割を担うことが多い
+
+DHCPサーバにはあらかじめ配布するIPアドレスの範囲やデフォルトルートの情報を指定しておく
+各DHCPクライアントはその情報を元にネットワークの設定を行う
+
+### NetworkNamespaceで動かしてみる
+
+```shell
+sudo ip netns add server
+sudo ip netns add client
+```
+
+```shell
+sudo ip link add s-veth0 type veth peer name c-veth0
+sudo ip link set s-veth0 netns server
+sudo ip link set c-veth0 netns client
+```
+
+```shell
+sudo ip netns exec server ip link set s-veth0 up
+sudo ip netns exec client ip link set c-veth0 up
+```
+
+IPアドレスはDHCPサーバにのみ設定する
+
+```shell
+sudo ip netns exec server ip address add 192.0.2.254/24 dev s-veth0 
+```
+
+DHCPサーバ側でdnsmasqコマンドを実行する
+
+```shell
+sudo ip netns exec server dnsmasq \
+--dhcp-range=192.0.2.100,192.0.2.200,255.255.255.0 \
+--interface=s-veth0 \
+--port 0 \
+--no-resolv \
+--no-domain
+```
+
+DCHPクライアントを別ターミナルで立ち上げ、dhclientコマンドを実行する
+
+```shell
+sudo ip netns exec client dhclient -d c-veth0
+```
+
+しばらくするとIPアドレスが自動的に付与される
+終わったらdhclientコマンドは終了し、IPアドレスを確認してみる
+
+```shell
+sudo ip netns exec client ip address show | grep "inet "
+```
+
+ルーティングテーブルも確認してみる
+
+```shell
+sudo ip netns exec client ip route show
+```
+
+※ ブロードバンドルータのグローバルアドレスはDHCPではないが似たような仕組みを使って、他のところから使用するIPアドレスを割り当ててもらっていることが多い
+**PPPoE**(Point-to-Point over Ethernet)というプロトコルでやりとりされるIPCP(Internet Protocol Control Protcol)というプロトコルのオプションでアドレスが配布されている
+ちなみに上記はIPv4の話であり、IPv6ではまた事情が異なる
+
