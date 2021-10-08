@@ -1697,4 +1697,106 @@ Last-Modified: Thu, 07 Oct 2021 14:31:27 GMT
 * socket() : ソケットでどんな種類の通信をするかを指定
 * connect() : 通信したいサーバとポートを指定し接続を開く
 * send() / recv() : バイト列を送受信する
-* close() : 接続を閉じる 
+* close() : 接続を閉じる
+
+### エコーサーバ
+
+今度はソケットをサーバとして使ってみる
+単純に送られてきたメッセージをそのまま送り返すだけのサーバ
+
+下記Pythonスクリプトを作成する
+
+server.py
+
+```python
+#!/user/bin/env python3
+
+import socket
+
+def send_msg(sock, msg):
+  """ソケットに指定したバイト列を書き込む関数"""
+  #これまで送信できたバイト数
+  total_sent_len = 0
+  #送信したいバイト数
+  total_msg_len = len(msg)
+  #まだ送信したいデータが残っているか判定
+  while total_sent_len < total_msg_len:
+    #ソケットにバイト列を書き込んで、書き込めたバイト数を得る
+    sent_len = sock.send(msg[total_sent_len:])
+    #全く書き込めなかったらソケットの接続は終了している
+    if sent_len == 0:
+      raise RuntimeError('socket connection broken')
+    # 書き込めた分を加算する
+    total_sent_len += sent_len
+    
+def recv_msg(sock, chunk_len=1024):
+  """ソケットから接続が終わるまでバイト列を読み込むジェネレータ関数"""
+  while True:
+    # ソケットから指定したバイト数を読み込む
+    received_chunk = sock.recv(chunk_len)
+    # 全く読めなかった時は接続が終了している
+    if len(received_chunk) == 0:
+      break
+    # 受信したバイト列を返す
+    yield received_chunk
+    
+def main():
+  """スクリプトとして実行されたときに呼び出されるメイン関数"""
+  # IPv4 / TCP で使用するソケットを準備する
+  server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  # 'Address already in use'の回避策
+  server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
+  # クライアントから接続を待ち受けるIPアドレスとポートを指定
+  server_socket.bind(('127.0.0.1', 54321))
+  # 接続の待受を開始
+  server_socket.listen()
+  # サーバが動作を開始したことを表示する
+  print('starting server ...')
+  # 接続を処理
+  client_socket, (client_address, client_port) = server_socket.accept()
+  # 接続してきたクライアント情報を表示
+  print(f'accepted from {client_address}:{client_port}')
+  # ソケットからバイト列を読み込む
+  for received_msg in recv_msg(client_socket):
+    # 読み込んだ内容をそのままソケットに書き込む(エコーバック)
+    send_msg(client_socket, received_msg)
+    # 送受信した内容を出力しておく
+    print(f'echo: {received_msg}')
+  #使い終わったソケットをクローズする
+  client_socket.close()
+  server_socket.close()
+  
+if __name__ == '__main__':
+  """スクリプトのエントリーポイントとしてメイン関数を実行する"""
+  main()
+```
+
+主なソケットのAPI
+
+* socket() ソケットでそんな種類の通信をするか指定する
+* bind() 接続を待ち受けるIPアドレスとポート番号を指定する
+* listen() 接続の待受を開始する
+* accept() 接続してきたクライアントを処理する
+* send() / recv() バイト列を送受信する
+* close() 接続を閉じる
+
+### ssコマンド
+
+ssコマンドを使うとソケットが待ち受けているIPアドレスがポート番号などを確認できる
+試しにTCPで待ち受けているソケットとそれを利用しているプロセスの一覧を表示してみる
+
+```shell
+sudo ss -tlnp
+```
+
+```shell
+State     Recv-Q    Send-Q       Local Address:Port        Peer Address:Port    Process                                                                         
+LISTEN    0         5                127.0.0.1:80               0.0.0.0:*        users:(("python3",pid=69963,fd=3))                                             
+LISTEN    0         128              127.0.0.1:54321            0.0.0.0:*        users:(("python3",pid=70190,fd=3))                                             
+LISTEN    0         4096         127.0.0.53%lo:53               0.0.0.0:*        users:(("systemd-resolve",pid=51250,fd=13))                                    
+LISTEN    0         128                0.0.0.0:22               0.0.0.0:*        users:(("sshd",pid=49012,fd=3))                                                
+LISTEN    0         128                   [::]:22                  [::]:*        users:(("sshd",pid=49012,fd=4))
+```
+
+Pythonのプロセスが127.0.0.1のTCP/54321で待ち受けていることがわかる
+
