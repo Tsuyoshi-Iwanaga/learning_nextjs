@@ -1445,3 +1445,256 @@ IP 203.0.113.1 > 203.0.113.254: ICMP echo reply, id 3810, seq 1, length 64
 【補足2】IPv4アドレスの割り当ては**インターネットレジストリ**という組織が管理をしている
 **IANA**を頂点とした階層構造の組織で、下位組織から上位組織にIPv4アドレスの割り当てを申請し、受理されると上位組織の在庫から一部を受け取るような仕組みになっている
 
+### Destination NAT
+
+WAN側から特定のLANにあるノードへ通信する場合に使用される
+※つまり**外から内**に入ってくる通信
+
+一般的には**ポートを空ける**と表現される操作がDestination NAT
+
+インターネットではプライベートIPアドレスを宛先にしたバケットはルーティングできないため、ルータがそれを受け取り、LAN内の特定のノードに転送する仕組みが必要になってくる
+この際に全てのパケットを対象とするのではなく、**送信先のポートが特定の値**になっているTCPやUDPのパケットだけを書きかえてLAN内の特定ノードに転送する
+（トランスポート層のプロトコルで事前に特定ポートに関してだけインターネットからの通信を許可しておく）
+
+### 実際に試してみる
+
+先ほど作ったSource NATで構成したネットワークが使えるので流用する
+まずはiptablesコマンドを使ってDestination NATのルールを追加する
+
+```shell
+sudo ip netns exec router iptables -t nat \
+-A PREROUTING \
+-p tcp \
+--dport 54321 \
+-d 203.0.113.254 \
+-j DNAT \
+--to-destination 192.0.2.1
+```
+
+-A : 処理を追加するチェイン PREROUTINGはインターフェースからパケットが入ってきた直後
+-p : 処理の対象となるトランスポート層のプロトコルを指定
+--dport : 処理の対象となるポート番号
+-d : 書き換える前の送信先IPアドレス
+-j : 条件に一致したパケットをどう処理するかのルール、DNATはDestination NATを示す
+--to-destination : 書きかえた後の送信先IPアドレス
+
+テーブルを確認するとこうなる
+
+```shell
+Chain PREROUTING (policy ACCEPT)
+target     prot opt source               destination         
+DNAT       tcp  --  anywhere             203.0.113.254        tcp dpt:54321 to:192.0.2.1
+
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain POSTROUTING (policy ACCEPT)
+target     prot opt source               destination         
+MASQUERADE  all  --  192.0.2.0/24         anywhere 
+```
+
+ncコマンドで確認してみる
+まずはLAN側のNetworkNamespaceでTCPの54321ポートを待ち受けるサーバを起動する
+
+```shell
+sudo ip netns exec lan nc -lnv 54321
+```
+
+WAN側から接続してみるが、ここではルータが持っているグローバルアドレスに相当するIPアドレスに通信する
+
+```shell
+sudo ip netns exec wan nc 203.0.113.254 54321
+```
+
+tcpdumpでまずはWAN側のネットワークインターフェースを監視する
+
+```shell
+sudo ip netns exec wan tcpdump -tnl -i wan-veth0 "tcp and port 54321"
+```
+
+何かしらWANからメッセージを送信するとこのような出力になる
+
+```shell
+IP 203.0.113.1.49130 > 203.0.113.254.54321: Flags [P.], seq 2557685632:2557685647, ack 381876254, win 502, options [nop,nop,TS val 3163989713 ecr 2518331099], length 15
+
+IP 203.0.113.254.54321 > 203.0.113.1.49130: Flags [.], ack 15, win 509, options [nop,nop,TS val 2518552433 ecr 3163989713], length 0
+```
+
+続いてLAN側のネットワークインターフェースを監視する
+
+```shell
+sudo ip netns exec lan tcpdump -tnl -i lan-veth0 "tcp and port 54321"
+```
+
+何かしらWANからメッセージを送信するとこのような出力になる
+
+```shell
+IP 203.0.113.1.49130 > 192.0.2.1.54321: Flags [P.], seq 2557685647:2557685663, ack 381876254, win 502, options [nop,nop,TS val 3164176610 ecr 2518552433], length 16
+
+IP 192.0.2.1.54321 > 203.0.113.1.49130: Flags [.], ack 16, win 509, options [nop,nop,TS val 2518739330 ecr 3164176610], length 0
+```
+
+無事にLAN側ではDestination NATによってパケットのIPアドレス送信先がLAN内のプライベートアドレスに変更されており、結果としてLAN内にいるホストへの通信が可能になることがわかる
+
+【補足】CGN(Carrier Grade NAT)とは?
+IPアドレスの逼迫に伴い普及してきた仕組み、家庭やオフィスだけでなくプロバイダレベルで導入したもの
+プロバイダの持つ少数のグローバルアドレスをさらに多くのコンピュータで共有する
+
+CGNにおいてはプロバイダが持つグローバルアドレスと**ISPシェアードアドレス**と呼ばれるアドレスを相互変換する
+これはCGNのために予約された**100.64.0.0/10**のレンジにあるIPアドレス
+
+ポートを勝手にユーザ側で空けることができないため、モバイルネットワークなど参加デバイスの数が多いかつインターネットにポートを公開するユースケースが少ないようなケースで用いられる
+
+## ⑧ソケットプログラミング
+
+ネットワークを扱うプログラムを記述することを一般にネットワークプログラミングという
+そのためにいくつかのAPIがあるが、Unix系のOSでデファクトスタンダードとなっているのが**ソケット**というAPI
+
+ソケットを使ったネットワークプログラミングをソケットプログラミングと呼ぶ
+ソケットはネットワークを抽象化したインターフェースでホスト間の通信やホスト内での通信(IPC : Inter Process Communication)に用いられる
+
+ソケットの使い方は主にサーバとクライアントで分かれている
+
+* サーバ：クライアントからの接続を待ち受ける
+* クライアント：サーバへ接続しにいく
+
+### HTTPクライアント
+
+下準備としてHTTPサーバを用意しておく
+
+```shell
+mkdir -p /var/tmp/http-home
+cd /var/tmp/http-home
+```
+
+```shell
+cat << 'EOF' > index.html
+<!doctype html>
+<html>
+<head>
+<title>Hello, World</title>
+</head>
+<body>
+<h1>Hello, World</h1>
+</body>
+</html>
+EOF
+```
+
+```shell
+sudo python3 -m http.server -b 127.0.0.1 80
+```
+
+下記Pythonスクリプトを作成する
+
+http_client.py
+
+```python
+#! /usr/bin/env python3
+
+"""ソケットを使ってHTTPクライアントを実装したスクリプト"""
+
+import socket
+
+def send_msg(sock, msg):
+    """ソケットに指定したバイト列を書き込む関数"""
+
+    # これまでに送信できたバイト数
+    total_sent_len = 0
+
+    # 送信したいバイト数
+    total_msg_len = len(msg)
+    
+    # まだ送信したいデータが残っているか
+    while total_sent_len < total_msg_len:
+        
+        # ソケットにバイト列を書き込んで書き込めたバイト数を得る
+        sent_len = sock.send(msg[total_sent_len:])
+        
+        # 全く書き込めなかったらソケットの接続は終了している
+        if sent_len == 0:
+            raise RuntimeError('socket connection broken')
+
+        # 書き込めた分を加算する
+        total_sent_len += sent_len
+
+def recv_msg(sock, chunk_len=1024):
+    """ソケットから接続が終わるまでバイト列を読み込むジェネレータ関数"""
+    while True:
+        # ソケットから指定したバイト数を読み込む
+        received_chunk = sock.recv(chunk_len)
+
+        # 全く読みめなかったら接続が終了している
+        if len(received_chunk) == 0:
+            break
+
+        # 受信したバイト列を返す
+        yield received_chunk
+
+def main():
+    """スクリプトとして実行されたときに呼び出されるメイン関数"""
+    # IPv4 / TCP で通信するソケットのインスタンス生成
+    # socket.AF_INETはネットワーク層にIPv4を使うという指定
+    # socket.SOCK_STREAMはトランスポート層にTCPを使うことを指定
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    # ループバックアドレスのTCP/80ポートに接続する
+    client_socket.connect(('127.0.0.1', 80))
+
+    # HTTPサーバからドキュメントを取得するためのGETリクエスト
+    request_text = 'GET / HTTP/1.0\r\n\r\n'
+
+    # 文字列をバイト列にエンコード
+    # ソケットにデータを書き込むには文字列ではなくバイト列が必要
+    request_bytes = request_text.encode('ASCII')
+
+    #ソケットにリクエストのバイト列を書き込む
+    send_msg(client_socket, request_bytes)
+
+    #ソケットからレスポンスのバイト列を読み込む
+    received_bytes = b''.join(recv_msg(client_socket))
+
+    #読み込んだバイト列を文字列にデコードする
+    received_text = received_bytes.decode('ASCII')
+
+    #得られた文字列を表示する
+    print(received_text)
+
+    #使い終わったソケットを閉じる
+    client_socket.close()
+
+if __name__ == '__main__':
+    """スクリプトのエントリーポイントとしてメイン関数を実行する"""
+    main()
+```
+
+```shell
+python3 http_client.py #実行
+
+HTTP/1.0 200 OK
+Server: SimpleHTTP/0.6 Python/3.8.10
+Date: Fri, 08 Oct 2021 14:10:56 GMT
+Content-type: text/html
+Content-Length: 111
+Last-Modified: Thu, 07 Oct 2021 14:31:27 GMT
+
+<!doctype html>
+<html>
+<head>
+<title>Hello, World</title>
+</head>
+<body>
+<h1>Hello, World</h1>
+</body>
+</html>
+```
+
+主なソケットのAPI
+
+* socket() : ソケットでどんな種類の通信をするかを指定
+* connect() : 通信したいサーバとポートを指定し接続を開く
+* send() / recv() : バイト列を送受信する
+* close() : 接続を閉じる 
