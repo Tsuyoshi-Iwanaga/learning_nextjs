@@ -1800,3 +1800,180 @@ LISTEN    0         128                   [::]:22                  [::]:*       
 
 Pythonのプロセスが127.0.0.1のTCP/54321で待ち受けていることがわかる
 
+### バイナリベースのプロトコル
+
+バイナリベースのプロトコルで気をつけないといけないポイントが**バイトオーダー**または**エディアン**と呼ばれる概念
+
+32ビット(4バイト)で表現された0x12345678という数値で考えてみる
+これをメモリで扱う場合は1バイト単位で読み書きされるので試しに1バイトずつに区切ると12,34,56,78となる
+
+まず考えられるのは基準となるメモリアドレスから順番に書き込む方法(12, 34, 56, 78)これが**ビックエディアン**
+もう一つは順番を逆にする方法、つまり(78, 56, 34, 12)これが**リトルエディアン**
+
+エディアンはCPUのアーキテクチャによって異なるが、TCP/IPでデータを運ぶ際にはこれは統一されている必要ある
+
+※バイトオーダーの誤りに由来する不具合を**エディアンバグ**という
+TCP/IPを扱うソフトウェアではこれが起きやすい傾向がある
+
+TCP/IPの世界ではバイトオーダーを**ビッグエディアン**に統一している
+この点からネットワークでのビッグエディアンをネットワークバイトオーダーと呼ぶこともある
+対してCPUのアーキテクチャに依存したコンピュータ内部での表現方法はホストバイトオーダーと呼ぶ
+
+つまりバイナリデータをTCP/IPで送信するときはホストバイトオーダーをネットワークバイトオーダーに変換しなければならず、反対に受信時にはネットワークバイトオーダーをホストバイトオーダーに変換する必要がある
+
+### 足し算プロトコル
+
+今回はクライアントから2つの32ビット整数を受け取って、それらを足し合わせて返すプロトコルを実装する
+
+server.py
+
+```python
+#!/usr/bin/env python3
+
+import socket
+import struct
+
+def send_msg(sock, msg):
+    total_sent_len = 0
+    total_msg_len = len(msg)
+
+    while total_sent_len < total_msg_len:
+        sent_len = sock.send(msg[total_sent_len:])
+
+        if sent_len == 0:
+            raise RuntimeError('socket connection broken')
+
+        total_sent_len += sent_len
+
+def recv_msg(sock, total_msg_size):
+    total_recv_size = 0
+
+    while total_recv_size < total_msg_size:
+        received_chunk = sock.recv(total_msg_size - total_recv_size)
+
+        if len(received_chunk) == 0:
+            raise RuntimeError('socket connnection broken')
+
+        yield received_chunk
+        
+        total_recv_size += len(received_chunk)
+
+def main():
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
+    server_socket.bind(('127.0.0.1', 54321))
+    server_socket.listen()
+    
+    print('starting server ...')
+
+    client_socket, (client_address, client_port) = server_socket.accept()
+
+    print(f'accepted from {client_address}:{client_port}')
+
+    received_msg = b''.join(recv_msg(client_socket, total_msg_size=8))
+
+    print(f'received: {received_msg}')
+
+    # ネットワークバイトオーダーからホストバイトオーダーへの変換
+    (operand1, operand2) = struct.unpack('!ii', received_msg)
+
+    print(f'operand1: {operand1}, operand2: {operand2}')
+
+    result = operand1 + operand2
+
+    print(f'result: {result}')
+
+    # ホストバイトオーダーからネットワークバイトオーダーへの変換
+    result_msg = struct.pack('!q', result)
+
+    send_msg(client_socket, result_msg)
+
+    print(f'sent: {result_msg}')
+
+    client_socket.close()
+    server_socket.close()
+
+if __name__ == '__main__':
+    main()
+```
+
+Client.py
+
+```python
+#!/usr/bin/env python3
+
+import socket
+import struct
+
+def send_msg(sock, msg):
+    total_sent_len = 0
+    total_msg_len = len(msg)
+
+    while total_sent_len < total_msg_len:
+        sent_len = sock.send(msg[total_sent_len:])
+
+        if sent_len == 0:
+            raise RuntimeError('socket connnection broken')
+
+        total_sent_len += sent_len
+
+def recv_msg(sock, total_msg_size):
+    total_recv_size = 0
+
+    while total_recv_size < total_msg_size:
+        received_chunk = sock.recv(total_msg_size, total_recv_size)
+
+        if len(received_chunk) == 0:
+            raise RuntimeError('socket connection broken')
+
+        yield received_chunk
+
+        total_recv_size += len(received_chunk)
+
+def main():
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client_socket.connect(('127.0.0.1', 54321))
+    operand1, operand2 = 1000, 2000
+
+    print(f'operand1: {operand1}, operand2: {operand2}')
+
+    request_msg = struct.pack('!ii', operand1, operand2)
+
+    send_msg(client_socket, request_msg)
+
+    print(f'sent: {request_msg}')
+
+    received_msg = b''.join(recv_msg(client_socket, 8))
+
+    print(f'received: {received_msg}')
+
+    (added_value, ) = struct.unpack('!q', received_msg)
+
+    print(f'result: {added_value}')
+
+    client_socket.close()
+
+if __name__ == '__main__':
+    main()
+```
+
+実行した時の出力
+
+サーバ側
+
+```shell
+received: b'\x00\x00\x03\xe8\x00\x00\x07\xd0'
+operand1: 1000, operand2: 2000
+result: 3000
+sent: b'\x00\x00\x00\x00\x00\x00\x0b\xb8'
+```
+
+クライアント側
+
+```shell
+operand1: 1000, operand2: 2000
+sent: b'\x00\x00\x03\xe8\x00\x00\x07\xd0'
+received: b'\x00\x00\x00\x00\x00\x00\x0b\xb8'
+result: 3000
+```
+
