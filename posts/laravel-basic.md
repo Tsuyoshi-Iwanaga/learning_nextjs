@@ -1,5 +1,5 @@
 ---
-title: 'Laravelの基本'
+title: 'Laravel'
 date: '2021-09-29'
 ---
 
