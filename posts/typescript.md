@@ -376,3 +376,281 @@ function eternal(): never {
 }
 ```
 
+### 省略可能な引数
+
+基本的にはTypeScriptは宣言された引数は全て必須(JavaScriptでは全てが省略可能)
+よって引数を省略したい場合は仮引数の後方に?を付与する
+
+```typescript
+function showTime(time?: Date): string {
+  if(time === undefined) {
+    return new Date().toLocaleString()
+  } else {
+    return time.toLocaleString()
+  }
+}
+console.log(showTime())
+```
+
+### 引数に規定値を設定する
+
+引数が省略される場合は関数内で分岐するよりもこちらの方がシンプル
+
+```typescript
+function showTime(time: Date = new Date()): string {
+  return time.toLocaleString()
+}
+console.log(showTime())
+```
+
+* 任意引数の後ろに必須引数を置くことはできない
+* 規定値には式も指定可能
+* 引数にundefinedを指定して関数を呼び出すと、明示的に引数を省略したとみなされる
+* 引数にnullを指定して関数を呼び出すと、規定値は適用されない（nullは値がないという状態を示す）
+
+### 可変長引数
+
+仮引数の前に...をつけることで可変長引数となる
+任意の個数の引数を配列としてまとめて受け取ることができる機能
+
+```typescript
+function sum(...values: number[]) {
+  let result = 0
+  for (let value of values) {
+    result += value
+  }
+  return result
+}
+console.log(sum(1, 5, -8, 10))//8
+```
+
+### 関数のオーバーロード
+
+オーバーロードとは同じ名前でありながら、引数リストや戻り値の型が異なる関数を定義すること
+
+シグニチャを指定することで型チェックが行われ、例えば下記の文字列を引数に渡して関数を実行しようとすると静的エラーとして検出できるようになる(anyだけだとこの場合はエラーにならない)
+
+```typescript
+function show(value: number): void
+function show(value: boolean): void
+function show(value: any): void {
+  if (typeof value === 'number') {
+    console.log(value.toFixed(0))
+  } else {
+    console.log(value ? '真' : '偽')
+  }
+}
+show(10.387)
+show(false)
+show('ほげ')
+```
+
+## 高度な型
+
+### 共用型(Union Types)
+
+複数の型のうちのどれか、を表す型
+
+```typescript
+let data: string | boolean
+data = 'hoge'
+data = false
+data = 1 //エラー
+```
+
+下記は計算の結果、正の数なら数値型を、負の数ならfalse(真偽値型)を返却する関数
+
+```typescript
+function square(value: number): number | boolean {
+  if (value < 0) {
+    return false
+  } else {
+    return Math.sqrt(value)
+  }
+}
+console.log(square(9)) //3
+console.log(square(-9)) //false
+```
+
+オーバーロードの使用する場合もこの共用型を使うとシンプルに記載することができる場合がある
+
+### 型ガード
+
+型ガード(Type Guards)とは変数の型を判定することで、対象となった変数の型を特定する機能
+
+```typescript
+function process(value: string | number) {
+  return value.toUpperCase() //number型にないメソッドなのでエラー
+}
+```
+
+```typescript
+function process(value: string | number) {
+  if(typeof value === 'string') {
+    return value.toUpperCase()
+  }
+  //値を返さない場合があるとしてエラーになる(numberの時)
+}
+```
+
+```typescript
+function process(value: string | number) {
+  if(typeof value === 'string') {
+    return value.toUpperCase()
+  } else {
+    return value.toFixed(1)
+  }
+}
+```
+
+### instanceof / in 演算子
+
+typeof演算子はプリミティブ型の判定にしか使えない
+クラス型の判定にはinstanceof演算子を使う
+
+```typescript
+if(obj instanceof Person) { ... } //objはPerson型であるかどうか
+```
+
+またin演算子で特定のメンバーが存在するかを判定し、型ガードとすることも可能
+
+```typescript
+if('name' in obj) { ... } //objがnameプロパティを持っているかどうか
+```
+
+### ユーザ定義の型ガード関数
+
+型判定のための関数を型ガードとして利用することもできる
+
+```typescript
+function isBook(inf: Book | Magazine) : inf is Book { //返り値を「引数 is 型名」にする
+  return (inf as Book).isbn !== undefined
+}
+
+let i = getInfo()　//BookかMagazineのインスタンスが返されるとする
+
+if(isBook(i)) {
+  console.log(i.isbn)
+} else {
+  console.log(i.mcode)
+}
+```
+
+TypeScriptで型ガード関数として使用するための条件は戻り値を**引数 is 型名**にする
+
+### unknown型
+
+unknown型はいわゆるなんでもありの型(中身が何かわからないのでなんでも受け入れる)
+
+```typescript
+let data: unknown = 10
+data = 'Hoge'
+data = [true, false, true]
+```
+
+any型と似ているが、下記はエラーになる
+
+```typescript
+let str: unknown = 'Hoge'
+console.log(str.trim())
+```
+
+any型はなんでもありなので変数に値を入れた後どんな操作をしても無制限に許容してしまう
+一方unknown型は「何かわからない = なんでもありうる」という意味なのでメソッドや演算子の呼び出しを許容しない
+
+よってunknown型に格納したデータは型ガードを使って型を特定した後でなければ使用することはできない
+この仕組みによりunknown型は型安全なany型と言える
+
+```typescript
+let str: unknown = 'Hoge'
+if(typeof str === 'string') {
+  console.log(str.trim())
+}
+```
+
+### null非許容型
+
+TypeScriptでは規定では全ての型に対してnull/undefinedを代入することができるが、tsconfig.jsonの設定にて**strictNullChecks**をtrueにすると全ての型でnull/undefinedを禁止することができる(null非許容型)
+
+この状態でnull/undefinedを受け付けるためには下記のように共用型を使用する必要がある
+
+```typescript
+let data1: string | undefined = undefined
+let data2: string | null = null
+```
+
+また上記のようなnull許容型のメンバーを扱う際に便利な演算子が存在する
+例えば以下のように型チェックをしているコードがあるとする
+（nullもしくはundefinedでない場合にだけそのメンバーにアクセスし、そうでなければundefinedを返す）
+
+```typescript
+let hoge: string | null | undefined
+let result = (hoge === null || hoge === undefined) ? undefined : hoge.trim()
+```
+
+**?演算子**を使うとこのようにシンプルに記載できる
+
+```typescript
+let result = hoge?.trim()
+```
+
+またundefinedやnullの場合に規定の値を返すような場合には**??演算子**を使うことができる
+
+```typescript
+console.log(hoge??'x') //hogeがあればhoge、undefined/nullなら’x’を返す
+```
+
+### 型エイリアス
+
+特定の型に対して別名を設定するための仕組み
+主にタプル型や共用型に短い名前をつける目的で使用される
+
+```typescript
+type FooType = [ string, number, boolean ]
+let data: FooType = ['abc', 123, true]
+```
+
+### 文字列リテラル型
+
+文字列リテラル(特定の文字列)をそのまま型として利用できる
+これを使うと特定の文字列のみを受け入れる変数を宣言できる
+
+```typescript
+type Season = 'spring' | 'summer' | 'autumn' | 'winter'
+function getSeason(s: Season) { ... }
+
+getSeason('spling')
+getSeason('fall') //エラー
+```
+
+### その他のリテラル型
+
+文字列に限らずnumber, boolean, enumなどでもリテラル型が使用できる
+
+```typescript
+type FalsyType = '' | 0 | false | null | undefined
+```
+
+```typescript
+type DiceType = 1 | 2 | 3 | 4 | 5 | 6
+```
+
+```typescript
+enum Subject { JAPANESE, MATH, SCIENCE, SOCIAL_STUDY, ENGLISH }
+type SciencePart = Subject.MATH | Subject.SCIENCE //理系科目だけの型
+```
+
+### リテラル型と型推論
+
+letとconstでは型推論のときにどのような型が割り当てられるかが異なる
+letは後から変更される可能性があるため下記では一般的なnumber型で推論される(型のwidening)
+
+```typescript
+const a = 10 //a: 10
+let b = 53 //b: number
+```
+
+
+
+
+
