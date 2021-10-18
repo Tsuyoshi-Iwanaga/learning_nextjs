@@ -650,7 +650,307 @@ const a = 10 //a: 10
 let b = 53 //b: number
 ```
 
+## オブジェクト指向構文
 
+以前より進化しているとはいえJavaScriptにおけるオブジェクト指向の言語仕様はまだまだ十分とはいえない
+（アクセス修飾子、インターフェース、ジェネリックなど）
 
+TypeScriptではそういった足りないと思われる機能を実装している
 
+### class命令
+
+```typescript
+class Person {
+  name: string
+  age: number
+  
+  constructor(name: string, age: number) { //constructorはvoid含め型を指定してはいけない
+    this.name = name
+    this.age = age
+  }
+  
+  show(): string {
+    return `${this.name} is ${this.age} years old.`
+  }
+}
+
+let person = new Person('Bob', 20)
+person.show() //Bob is 20 years old.
+```
+
+### アクセス修飾子
+
+* public : クラスの外からも自由にアクセスできる
+* protected : 同じクラスもしくは派生クラスのメンバーからのみアクセス可
+* private : 同じクラスからのみアクセス可
+
+```typescript
+class Person {
+  private name: string
+  private age: string
+  ...
+}
+console.log(person.name) //エラー
+```
+
+※補足
+TypeScript3.8以降では先頭子**#**でプライベートフィールドを表せるようになった
+(ECMAScriptで標準化が目指されている表記)
+
+```typescript
+class MyClass {
+  #data: number = 10
+  data2: number = 20
+}
+```
+
+### コンストラクタとプロパティ設定
+
+コンストラクタはクラスが初期化される際に呼ばれる
+この仕様上、インスタンスプロパティを初期化する用途によく使われる
+
+ちなみにTypeScriptでは**strictPropertyInitialization**の設定がtrueの時は初期化していないプロパティが存在するとエラーとなる
+
+たまに後からプロパティを初期化したいという場合もあるが、その場合はプロパティ末尾に**!**を付与する
+こうすると初期化のチェックを一時的に回避することができる
+
+```typescript
+class MyClass {
+  age!: number
+  ...
+}
+```
+
+### コンストラクタの省略表記
+
+こうするとプロパティの定義から代入までのコードを代用できる
+
+```typescript
+class Person {
+  constructor(private name: string, private age: number) {}
+}
+```
+
+### getter/setterアクセサ
+
+いわゆるプライベートなプロパティにアクセスするために用意された特別なメソッド
+
+```typescript
+class Person {
+  private _age!: number
+  
+  //getter
+  get age(): number {
+    return this._age
+  }
+
+  //setter
+  set age(value: number) {
+    if(value < 0) {
+      throw new RuntimeError('ageは正の数で指定してください')
+    }
+    this._age = value
+  }
+}
+
+let p = new Person()
+p.age = 10
+console.log(p.age) //10
+```
+
+getterとsetterを利用することで以下のメリットがある
+
+* 読み書きの制御 : setを省略すると読み書き専用、getを省略すると書き込み専用のプロパティを表現できる
+* 値チェック/加工 : 値の参照/更新時に追加の処理を差し込むことができる
+
+### 静的メンバー
+
+**static修飾子**を用いることで静的メンバ(静的メソッド/プロパティ)を定義できる
+
+```typescript
+class Figure {
+  public static PI: number = 3.146549
+  
+  public static circle(radius: number): number {
+    return radius * radius * this.PI //クラス内部で静的メンバにアクセスするときもthisが必要
+  }
+}
+console.log(Figure.PI) //3.146549
+console.log(Figure.circle(5)) //78.53975
+```
+
+### 継承
+
+元になるクラスの機能(メンバ)を引き継ぎつつ、新しい機能を追加したり元の機能の一部だけ修正したりすること
+継承元はスーパークラス、親クラス、基底クラス、継承の結果できたクラスはサブクラス、子クラス、派生クラス
+
+```typescript
+class Person {
+  constructor(
+    protected name: string,
+    protected age: number
+  ) {}
+  
+  show(): string {
+    return `${this.name} is ${this.age} years old.`
+  }
+}
+
+class BusinessPerson extends Person { //extendsで継承
+  work(): string {
+    return `${this.name} works hard.`
+  }
+}
+
+let p = new BusinessPerson('Bob', 30)
+console.log(p.show())
+console.log(p.work())
+```
+
+### オーバーライド
+
+基底クラスで定義済みのメソッド/コンストラクタを派生クラスで上書きすること
+親クラスの処理を呼ぶときは**super.メソッド名**で呼び出す(コンストラクタならsuper())
+
+```typescript
+class BusinessPerson extends Person {
+  protected clazz: string
+  
+  constructor(name: string, age: number, clazz:string) {
+    super(name, age)
+    this.clazz = clazz
+  }
+  
+  show(): string {
+    return super.show() + `${this.clazz}.`
+  }
+}
+```
+
+### 抽象メソッド
+
+派生クラスで**必ず機能を上書きしなければいけない**と指定するのが抽象メソッド/抽象プロパティの仕組み
+**abstruct修飾子**を使う
+
+共通の処理だけを親クラスにまとめておき、個々の機能は派生クラスに委ねることで見通しが良くなる
+
+```typescript
+abstract class Figure {//抽象クラス
+  constructor(protected width: number, protected height: number) {}
+  
+  abstract getArea(): number //抽象メソッド
+}
+
+class Triangle extends Figure {
+  getArea(): number { //抽象メソッドをオーバライドする
+    return this.width * this.height / 2
+  }
+}
+
+let t = new Triangle(10, 5)
+console.log(t.getArea())
+```
+
+### インターフェース
+
+TypeScriptは1つのクラスは一度に1つのクラスしか継承できない(**単一継承**)
+
+例えば派生クラスに対して複数のメソッドをオーバライドして欲しいが、全てのメソッドが派生クラスに必要なわけではない...という状況でも継承を使うと必要がないメソッドも引き継がれてしまう
+
+インターフェースは**全てのメソッドが抽象メソッドである特別なクラス**かつ**複数のインターフェースを同時に継承することができる**という特徴がある
+
+インターフェイスを実装する場合は継承のextendsではなく**implements**を利用する
+
+```typescript
+interface Figure { //インターフェースを宣言
+  getArea(): number
+}
+
+class Triangle implements Figure { //implementsで
+  constructor(private width: number, protected height: number) {}
+  getArea(): number {
+    return this.width * this.height / 2
+  }
+}
+
+let t = new Triangle(10, 5)
+console.log(t.getArea())
+```
+
+インターフェイスは次のような制限がある
+
+* メソッドは全て抽象メソッドでなければいけない(abstractは不要というか指定してはいけない)
+* アクセス修飾子も指定できない(全てのメンバはpublicであることが明らか)
+* 静的メンバも宣言できない
+
+### インターフェースの継承
+
+インターフェイスを継承して新しくインターフェイスを宣言することもできる
+
+```typescript
+interface Hoge extends Foo, Bar { ... }
+```
+
+またインターフェイスがクラスを継承することもできる(他言語ではできないことが多い)
+下記の場合はMyClassの実装は無視され、シグニチャだけが継承される
+
+```typescript
+class MyClass {
+  show() { ... }
+}
+interface Hoge extends MyClass { ... }
+```
+
+### 構造的部分型
+
+TypeScriptにおいては型の互換性(=何が派生クラスなのか)を判断するのに構造的部分型(Structual Subtyping)を採用している。一言で言うと型の構造にフォーカスし、それが互換性がある型かどうかを判定する方式
+
+```typescript
+interface Figure {
+  getArea(): number
+}
+
+class Triangle { //getAreaメソッドを持つが、Figureインターフェイスを明示的に実装はしていない
+  constructor(private width: number, protected height: number) {}
+  getArea(): number {
+    return this.width * this.height / 2
+  }
+}
+
+let t: Figure = new Triangle(10, 5)
+console.log(t.getArea())
+```
+
+上記のポイントはTriangleクラスが明示的にFigureインターフェイスを実装していないにも関わらず、Figure型の変数に対してTriangleのインスタンスを代入できている点
+
+このように明示的に特定のクラスやインターフェイスを継承/実装していなくても互換性があれば問題なしとみなす
+(※ C#やJavaなどは明示的に継承/実装しない限りは型に互換性があるとは判断されず、**公称的部分型**(Nominal Subtyping)と呼ぶ)
+
+### 型としてのthis
+
+this(クラス内において現在のインスタンスを指す)を型として扱う方法もある
+戻り値をthisとするとメソッドの結果からさらに別のメソッドを呼ぶような**メソッドチェーン**が実現できる
+
+```typescript
+class MyClass {
+  constructor(private _value: number) {}
+  
+  get value(): number {
+    return this._value
+  }
+  
+  plus(value: number): this { //戻り値はthis
+    this._value += value
+    return this
+  }
+
+  minus(value: number): this { //戻り値はthis
+    this._value -= value
+    return this
+  }
+}
+
+let clazz = new MyClass(10)
+console.log(clazz.plus(10).minus(5).value) //15
+```
 
