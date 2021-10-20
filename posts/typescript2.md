@@ -221,3 +221,211 @@ let c2: MyOption = obj2 //OK
 let c3: MyOption = obj3 //OK
 ```
 
+### keyofとLookup Typesによる型の切り出し
+
+keyofやLookup Typesというのを使うと既存のある型から型情報を取り出すことができる
+
+#### keyof
+
+既存の型からプロパティ名の集合を取り出し、文字列リテラルとして返す
+
+```typescript
+interface Product {
+  name: string
+  price: number
+}
+
+type ProductKeys = keyof Product // "name"|"price"となる
+```
+
+```typescript
+function getProp(obj: Product, name: keyof Product) {
+  return obj[name]
+} //nameにはProduct型のプロパティ名しか指定できなくなる
+```
+
+#### Lookup Types
+
+特定の型から配下のプロパティ型を抜き出す
+T[K]で**T型に属するKプロパティの型を取得**することができる
+
+```typescript
+interface Product {
+  name: string
+  price: number
+}
+type NameType = Product['name'] //string
+type NamePriceType = Product['name'|'price'] //string|number
+type HogeType = Product['hoge'] //プロパティがなければエラー
+```
+
+```typescript
+function getProp<T, K extends keyof T>(obj: T, name: K) {
+  return obj[name]
+}
+
+let p = { name:'お弁当', price: 500 }
+console.log(getProp(p, 'name')) //お弁当
+console.log(getProp(p, 'price')) //500
+```
+
+### Mapped Types
+
+既存の型を変換するための仕組み、これにより既存の型を元に新しい型を定義できる
+
+```typescript
+interface Product {
+  name: string
+  price: number
+}
+
+type ReadonlyProduct = {
+  readonly [K in keyof Product]: Product[K]
+}
+// こうなる
+// type ReadonlyProduct = {
+//   readonly name: string,
+//   readonly price: number,
+// }
+```
+
+```typescript
+type OptionProduct = {
+  [K in typeof Product]? : Product[K] //全てのプロパティをオプションにする
+}
+```
+
+```typescript
+type RemoveReadOnlyProduct = {
+  -readonly [K in keyof ReadonlyProduct]: ReadonlyProduct[K] //全てのプロパティのreadonlyを外す
+}
+```
+
+```typescript
+type RemoveOptionProcut = {
+  [K in keyof OptionProduct]-?: OptionProduct[K]
+}
+```
+
+### Conditional Types
+
+与えられた条件を満たすかどうかでX, Yいずれかの型を選択するというもの
+**T extends U ? X : Y**のような記法で表す
+(型Tが型Uに代入できる場合は型X, そうでなければ型Yという意味になる)
+
+```typescript
+type Intersection<T, U> = T extends U ? T : never
+
+type CommonType = Intersection<string | boolean | number, boolean | string[] | string>
+```
+
+上記の一行目ではTがUに代入できればT型を、できなければnever型を返すと宣言している
+共用型の場合は判定の際に分解されるので最終的にstring | boolean | never、すなわちstring | boolean型と判定される
+
+#### inferによる型のマッチング
+
+型マッチングを表現するためにはinferキーワードを使用する
+
+```typescript
+type ReturnedType<T> = T extends (...args: any[]) => infer R ? R : T
+```
+
+inferはextendsの条件句内でマッチした型を**一時的に保存しておき**、後に続く結果句で使用できる(ここではR)
+つまり上記は型Tが関数型であればその戻り値の型を、そうでなければ元の型Tを返すという意味になる
+
+### ユーティリティ型
+
+Mapped Types / Conditional Typesは型を再定義するのに強力な仕組みではあるが、何しろ可読性が悪くなる
+TypeScriptではよくある型定義を簡単に使うことができるようにユーティリティ型(Utility Types)と呼ばれる型を提供している（別名では**型関数**とも呼ばれている）
+
+#### Partial
+
+```typescript
+interface MyConfig {
+  title: number
+  debug: boolean
+}
+type MyConfigOption = Partial<MyConfig> //前プロパティを任意型に(~?)
+```
+
+#### Required
+
+```typescript
+type myConfigRequired = Required<MyConfig>
+```
+
+#### Readonly
+
+```typescript
+interface Article {
+  url: string
+}
+let a: Readonly<Article> = {
+  url: "https://hogehoge.com/"
+}
+```
+
+#### Record
+
+```typescript
+interface ContentInfo {
+  url: string
+  title: string
+  count: number
+}
+//Record<K, T>でK型で指定されたプロパティをもち、かつそのプロパティがT型になるような型を作る
+let mySite: Record<'top' | 'content' | 'about', ContentInfo> = {
+  top: { url: 'index.php', title: 'トップ', count: 100 },
+  content: { url: 'mail.php', title: '問い合わせ', count: 105 },
+  about: { url: 'me.php', title: '概要', count: 108 },
+}
+```
+
+#### Pick / Omit
+
+```typescript
+interface Book {
+  isbn: string
+  title: string
+  price: number
+  published: Date
+}
+// Pick<T, K>でT型から指定のプロパティ群Kだけを抜き出す
+type SubBook = Pick<Book, 'title'|'price'>
+// Omit<T, K>でT型から指定のプロパティ群Kを除く
+type SubBook2 = Omit<Book, 'isbn'|'published'>
+```
+
+#### Exclude / Extract
+
+```typescript
+type Type1 = string | number | boolean
+type NewType1 = Exclude<Type1, string | boolean> //Exclude<T, U>Tから指定の型Uを除外
+type NewType2 = Extract<Type1, string | object> //Extract<T, U>TとUに共通する型を抽出
+```
+
+#### NonNullable
+
+```typescript
+typeType2 = string | number | undefined | null
+typeNonNullableType2 = NonNullable<typeType2> //string | number
+```
+
+#### Parameters / ReturnType / ConstructorParameters
+
+```typescript
+function hoge(arg1: string, arg2?: boolean): string | number { ... }
+
+//Parameter<T> 与えられた関数型の引数を元にタプル型を作って返す
+type TypeP = Parameters<typeof hoge>
+
+//ReturnType<T> 関数型の戻り値の型を新しい型として返す
+type TypeR = ReturnType<typeof hoge>
+
+//ConstructorParameters<T> コンストラクターの引数を元にタプル型を返す
+class MyClass {
+  constructor(arg1: string, arg2?: boolean) { ... } 
+}
+type TypeC = ConstructorParameters<typeof MyClass>
+```
+
