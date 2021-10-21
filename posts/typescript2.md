@@ -630,9 +630,125 @@ g.value = new FooBar()
 console.log(g.getValue())
 ```
 
+### ジェネリックメソッド
 
+引数 / 戻り値 / ローカル変数の型をメソッド呼び出し時に指定できるメソッド
+メソッド名の直後に<...>で型引数を宣言する
 
+```typescript
+class MyCollection {
+  static addAll<T>(data: T[], ...values: T[]): T[] {
+    return data.concat(values)
+  }
+}
 
+let x = [10, 15, 30]
+console.log(MyCollection.addAll(x, 35, 50)) // 10, 15, 30, 35, 50
+```
 
+呼び出す際には引数の型から暗黙的に型引数の型を判定するので上記のように指定はしなくても良い
+ただし以下のように明示的に<string>と記載することも可能
 
+```typescript
+console.log(MyCollection.addAll<number>(x, 35, 50))
+```
 
+### デコレータ
+
+クラスやプロパティ、メソッド、引数などに対して付与できる一種の修飾子
+デコレータを利用することで@...の形式でアプリ本来のロジックとは直接関係しない付随的な情報を付与できる
+
+※ デコレータの機能は規定では無効になっているので利用するときはexperimentalDecoratorsオプションをtrueにする
+
+```typescript
+@Component({
+  selector: 'my-app',
+  templateUrl: './app.html',
+  styleUrl: ['./app.css']
+})
+export class AppComponent { ... }
+```
+
+デコレータの実体は**関数**となっているので任意の引数を渡すことができる
+また、引数がない場合は丸括弧を省略することもできる
+
+以下ログを出力するためのデコレータ
+
+```typescript
+function log(target: any, key: string, desc: PropertyDescriptor) {
+  let origin = desc.value //元のメソッドを退避させておく
+  desc.value = function() {
+    console.log(`${key} start ...`)
+    let start = Date.now()
+    let result = origin.apply(this, arguments) //元のメソッドを実行
+    let end = Date.now()
+    console.log(`${key} end ...`)
+    console.log(`Process Time ${end - start}ms`)
+    return result //元のメソッドの戻り値を返す
+  }
+}
+```
+
+* target : クラスのprototypeオブジェクト(staticメソッドであればコンストラクタ関数)
+* key : メソッドの名前
+* desc : メソッドの構成情報
+
+またdescは以下のような情報を持つ
+
+* value : 値(メソッド本体)
+* writable : 書き込み可否
+* configurable : 属性の変更や削除の可否
+* enumerable : 列挙の可否
+
+```typescript
+class MyClass {
+  @log
+  add(x: number, y:number): number {
+    let s = Date.now()
+    while (Date.now() - s < 4500) {
+      return x + y
+    }
+  }
+}
+let c = new MyClass()
+console.log(c.add(10, 20))
+```
+
+#### 引数付きのデコレータ
+
+引数を受け取るデコレータも定義することが可能
+そのためにはデコレータ関数自体をさらに関数でラップする(**デコレータファクトリー**)
+
+```typescript
+function log(tag: string) { //デコレータが引き受ける引数
+  function log(target: any, key: string, desc: PropertyDescriptor) { //デコレータ本体
+    let origin = desc.value
+    console.log(tag)
+    ...
+  }
+}
+```
+
+```typescript
+@log('Add Method')
+add(x: number, y:number): number {...}
+```
+
+### 型定義ファイル
+
+TypeScriptで外部のJavaScriptライブラリを活用したいという状況では、型情報がないためコンパイルが通らないことがある。
+そこでTypeScriptとJavaScriptとの連携をするために**型定義ファイル**が必要になる
+
+型定義ファイルとは型情報のみを定義したファイルのこと
+メジャーなライブラリについては大抵は型定義ファイルがすでに用意されている
+
+```typescript
+npm install --save-dev @types/jquery
+```
+
+なお既存ライブラリの型定義ファイルを探すにはTypeSearchというページが便利
+https://www.typescriptlang.org/dt/search
+
+うまくいくとnode_modules配下に@types/jqueryフォルダができ、中に.d.tsのファイルがインストールされる
+
+型定義ファイルの中で使用されている**declare**とは何か実体(変数や関数)があるわけではないがそれらがあることを前提に型付けだけを行うためのキーワード
